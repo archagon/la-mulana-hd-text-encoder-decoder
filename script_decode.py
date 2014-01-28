@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-La-Mulana HD script_decode.py modified by Alexei Baboulevitch to re-encode the .dat file.
+La-Mulana HD language .dat file encoder and decoder.
+The original script was downloaded from the La-Muana Wikia: http://lamulana-remake.wikia.com/wiki/Text_Dump
+Encoding support added by Alexei Baboulevitch.
 """
 
 import codecs, re, unicodedata, mmap
@@ -96,6 +98,9 @@ def decode_block(b):
 
 def encode_block(block):
     special_regex = r"^{([a-zA-Z]+)( (.*?))?}"
+    flag_regex = r"(\d+):=(\d+)"
+    color_regex = r"(\d+)-(\d+)-(\d+)"
+    cmd_regex = r"(\d+)-?"
 
     output = []
     count = 0
@@ -109,40 +114,52 @@ def encode_block(block):
             if command == "FF":
                 output.append(0x000C)
             elif command == "FLAG":
+                param_match = re.match(flag_regex, parameters)
+                assert param_match is not None
+
                 output.append(0x0040)
-                output.append(0)
-                output.append(0)
-                # TODO:
+                output.append(int(param_match.group(1)))
+                output.append(int(param_match.group(2)))
             elif command == "ITEM":
                 output.append(0x0042)
-                output.append(0)
-                # TODO:
+                output.append(int(parameters))
             elif command == "CLS":
                 output.append(0x0044);
             elif command == "BR":
                 output.append(0x0045);
             elif command == "POSE":
                 output.append(0x0046)
-                output.append(0)
-                # TODO:
+                output.append(int(parameters))
             elif command == "MANTRA":
                 output.append(0x0047)
-                output.append(0)
-                # TODO:
+                output.append(int(parameters))
             elif command == "COL":
+                param_match = re.match(color_regex, parameters)
+                assert param_match is not None
+
                 output.append(0x004a)
-                output.append(0)
-                output.append(0)
-                output.append(0)
-                # TODO:
+                output.append(int(param_match.group(1)))
+                output.append(int(param_match.group(2)))
+                output.append(int(param_match.group(3)))
             elif command == "CMD":
-                output.append(0x004e)
-                output.append(1)
-                output.append(0)
-                # TODO:
+                command_output = []
+                command_output.append(0x004e)
+                count = 0
+
+                while len(parameters) > 0:
+                    param_match = re.match(cmd_regex, parameters)
+                    assert param_match is not None
+
+                    command_output.append(int(param_match.group(1)))
+                    parameters = parameters[len(param_match.group(0)):]
+                    count += 1
+
+                command_output.insert(1, count)
+
+                output += command_output
             elif command == "SCENE":
                 output.append(0x004f)
-                output.append(0)
+                output.append(int(parameters))
             elif command == "UNDEFINED":
                 output.append(0x05c1)
                 output.append(0x05c2)
@@ -205,8 +222,6 @@ def encode(fin, fout):
 
         assert block_num == block_end_num
 
-        print "found block number " + str(block_num) + " with length " + str(block_len)
-
         encoded_block = encode_block(block_match[2])
         encoded_block.insert(0, len(encoded_block) * 2)
 
@@ -227,6 +242,6 @@ def encode(fin, fout):
 #     with codecs.open("script_code_new.dat", "w", "utf_16_be") as fout:
 #         encode(fin, fout)
 
-with codecs.open("script_code_new.dat", "r", "utf_16_be") as fin:
-    with codecs.open("script_out_new_cmd.txt", "w", "utf_8") as fout:
-        decode(fin, fout)
+# with codecs.open("script_code_new.dat", "r", "utf_16_be") as fin:
+#     with codecs.open("script_out_new_cmd.txt", "w", "utf_8") as fout:
+#         decode(fin, fout)
