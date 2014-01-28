@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import codecs,re
+"""
+La-Mulana HD script_decode.py modified by Alexei Baboulevitch to re-encode the .dat file.
+"""
+
+import codecs, re, unicodedata, mmap
 
 font00 = \
         u"!\"&'(),-./0123456789:?ABCDEFGHIJKLMNOPQRSTUVWXYZ"\
@@ -31,14 +35,17 @@ font00 = \
         u"幽技師柄期瞬電購任販Á;û+→↓←↑⓪①②③④⑤⑥⑦⑧⑨<”挑朝痛魅鍛戒飲憂照磨射互降沈醜触煮疲"\
         u"素競際易堅豪屈潔削除替Ü♡*$街極"
 
-def decode_block(b, showCmd):
+def decode_block(b):
     b = list(b)
     d = ""
-    l = ""
     while b:
         o = ord(b.pop(0))
         if o in [0x000A, 0x000C, 0x0020]:
-            s = unichr(o)
+            # handles LINE FEED, FORM FEED, SPACE
+            if (o == 0x000C):
+                s = "{FF}"
+            else:
+                s = unichr(o)
         elif o >= 0x0040 and o <= 0x0050:
             s = ""
             if o == 0x0040:
@@ -49,10 +56,8 @@ def decode_block(b, showCmd):
                 b = b[1:]
             elif o == 0x0044:
                 cmd = "{CLS}"
-                s = "<p>"
             elif o == 0x0045:
                 cmd = "{BR}"
-                s = "<br>"
             elif o == 0x0046:
                 cmd = "{POSE %d}" % ord(b[0])
                 b = b[1:]
@@ -62,10 +67,6 @@ def decode_block(b, showCmd):
             elif o == 0x004a:
                 colors = [ord(x) for x in b[:3]]
                 cmd = "{COL %03d-%03d-%03d}" % tuple(colors)
-                if sum(colors) > 0:
-                    s = "<span style='color:#%02x%02x%02x'>" % tuple(200-x for x in colors)
-                else:
-                    s = "</span>"
                 b = b[3:] #TODO: colors not verified
             elif o == 0x004e:
                 lenopts = ord(b[0])
@@ -76,51 +77,156 @@ def decode_block(b, showCmd):
                 cmd = "{SCENE %d}" % ord(b[0])
                 b = b[1:]
             else:
-                cmd = "{%02x}" % o
-            if showCmd:
-                s = cmd
+                cmd = "{UNK %02x}" % o
+                assert False
+            s = cmd
         elif o >= 0x0100 and o <= 0x05c0:
             s = font00[o-0x0100]
         elif o == 0x05c1:
-            s = "Un"
+            s = "{UN"
         elif o == 0x05c2:
-            s = "defi"
+            s = "DEFI"
         elif o == 0x05c3:
-            s = "ned"
+            s = "NED}"
         else:
-            s = "{%04x}" % o
+            s = "{UNK %04x}" % o
+            assert False
         d += s
-        l = s
     return d
 
-def decode(fin, fout, fout_cmd):
+def encode_block(block):
+    special_regex = r"^{([a-zA-Z]+)( (.*?))?}"
+
+    output = []
+    count = 0
+
+    while len(block) > 0:
+        match = re.match(special_regex, block)
+        if match is not None:
+            command = match.group(1)
+            parameters = match.group(3)
+
+            if command == "FF":
+                output.append(0x000C)
+            elif command == "FLAG":
+                output.append(0x0040)
+                output.append(0)
+                output.append(0)
+                # TODO:
+            elif command == "ITEM":
+                output.append(0x0042)
+                output.append(0)
+                # TODO:
+            elif command == "CLS":
+                output.append(0x0044);
+            elif command == "BR":
+                output.append(0x0045);
+            elif command == "POSE":
+                output.append(0x0046)
+                output.append(0)
+                # TODO:
+            elif command == "MANTRA":
+                output.append(0x0047)
+                output.append(0)
+                # TODO:
+            elif command == "COL":
+                output.append(0x004a)
+                output.append(0)
+                output.append(0)
+                output.append(0)
+                # TODO:
+            elif command == "CMD":
+                output.append(0x004e)
+                output.append(1)
+                output.append(0)
+                # TODO:
+            elif command == "SCENE":
+                output.append(0x004f)
+                output.append(0)
+            elif command == "UNDEFINED":
+                output.append(0x05c1)
+                output.append(0x05c2)
+                output.append(0x05c3)
+
+            # not handling UNK characters since they haven't appeared in my input
+
+            block = block[len(match.group(0)):]
+        else:
+            char_ord = ord(block[0])
+
+            location_in_font = font00.find(block[0:1])
+            if location_in_font != -1:
+                output.append(location_in_font + 0x0100)
+            else:
+                output.append(char_ord)
+
+            block = block[1:]
+
+    return output
+
+
+def decode(fin, fout):
+    # first character = number of blocks
     blocks = ord(fin.read(1))
     count = 0
     
     c = fin.read(1)
     while c:
+        # each block starts with the number of characters in it x 2
         o = ord(c)
         assert o % 2 == 0
+
         b = fin.read(o/2)
-        
-        s = "\n%s\n" % decode_block(b, showCmd=False)
-        s = re.sub("\f", "", s)
-        s = re.sub("\n\n+", "\n", s)
-        fout.write("-"*40+"BLOCK %d%s" % (count, s))
-        
-        s = "\n%s\n" % decode_block(b, showCmd=True)
-        fout_cmd.write("-"*40+"BLOCK %d%s" % (count, s))
+
+        block_header = "-" * 40 + " " + "BLOCK %d (%d) START" % (count, o/2)
+        block_footer = "-" * 40 + " " + "BLOCK %d END" % (count)
+
+        fout.write("%s\n%s\n%s\n" % (block_header, decode_block(b), block_footer))
         
         count += 1
         c = fin.read(1)
     assert count == blocks
 
-with codecs.open("script_code.dat", "r", "utf_16_be") as fin:
-    with codecs.open("script_out.txt", "w", "utf_8") as fout:
-        with codecs.open("script_out_cmd.txt", "w", "utf_8") as fout_cmd:
-            decode(fin, fout, fout_cmd)
+def encode(fin, fout):
+    block_regex = r"-+ BLOCK (\d+) \((\d+)\) START\n(.*?)\n-+ BLOCK (\d+) END"
 
-#freq = dict((c, script.count(c)) for c in set(script))
-#with open("script_freq.txt", "w") as fout:
-#    for c in sorted(set(script)):
-#        fout.write("%04x\t%d\n" % (ord(c), script.count(c)))
+    fin_string = linestring = fin.read();
+    block_matches = re.findall(block_regex, fin_string, re.DOTALL)
+
+    last_block_number = int(block_matches[-1][0]) + 1
+    assert len(block_matches) == last_block_number
+
+    encoded_blocks = [len(block_matches)]
+
+    for block_match in block_matches:
+        block_num = int(block_match[0])
+        block_len = int(block_match[1])
+        block_end_num = int(block_match[3])
+
+        assert block_num == block_end_num
+
+        print "found block number " + str(block_num) + " with length " + str(block_len)
+
+        encoded_block = encode_block(block_match[2])
+        encoded_block.insert(0, len(encoded_block) * 2)
+
+        encoded_blocks += encoded_block
+
+    encoded_blocks_string = ""
+
+    for char in encoded_blocks:
+        encoded_blocks_string += unichr(char)
+
+    fout.write(encoded_blocks_string)
+
+# with codecs.open("script_code.dat", "r", "utf_16_be") as fin:
+#     with codecs.open("script_out_cmd.txt", "w", "utf_8") as fout:
+#         decode(fin, fout)
+
+# with codecs.open("script_out_cmd.txt", "r", "utf_8") as fin:
+#     with codecs.open("script_code_new.dat", "w", "utf_16_be") as fout:
+#         encode(fin, fout)
+
+with codecs.open("script_code_new.dat", "r", "utf_16_be") as fin:
+    with codecs.open("script_out_new_cmd.txt", "w", "utf_8") as fout:
+        decode(fin, fout)
